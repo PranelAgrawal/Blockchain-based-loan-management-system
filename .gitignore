@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets (never commit keys or RPC URLs with credentials)
+.env
+.env.*
+!.env.example
+
+# Logs & debug
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Hardhat / Solidity
+cache/
+artifacts/
+typechain-types/
+coverage/
+coverage.json
+*.tsbuildinfo
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+*.local
+
+# Vite
+frontend/dist/
+*.vite/
+
+# Testing & coverage
+.nyc_output/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE / editor (optional: remove .vscode if you want to share settings)
+.idea/
+*.swp
+*.swo
+*~
+
+# Cursor (local/agent state — do not publish)
+.cursor/
+
+# Misc
+*.pem
+.cache/
+.turbo/

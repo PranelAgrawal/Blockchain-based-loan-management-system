@@ -1,0 +1,309 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+/**
+ * @title LoanManager
+ * @dev Core contract for managing loan requests, approvals, repayments, and defaults
+ */
+contract LoanManager is Ownable, ReentrancyGuard {
+    // Loan type enumeration
+    enum LoanType {
+        Personal,
+        Home,
+        Business
+    }
+
+    // Configuration for each loan type
+    struct LoanConfig {
+        uint256 interestRateBps; // annual interest rate in basis points (1% = 100 bps)
+        uint256 collateralRatioBps; // required collateral as a percentage of loan amount (in bps)
+        uint256 maxDurationDays; // maximum allowed duration in days
+        bool enabled;
+    }
+
+    // Loan structure
+    struct Loan {
+        uint256 loanId;
+        address borrower;
+        LoanType loanType;
+        uint256 amount;
+        uint256 duration;
+        bool collateralRequired;
+        bool approved;
+        bool repaid;
+        uint256 collateralAmount;
+        uint256 interestRateBps;
+        uint256 dueDate;
+        uint256 totalRepayment;
+        bool defaulted;
+    }
+
+    // Storage
+    mapping(uint256 => Loan) public loans;
+    uint256 public loanCounter;
+
+    // Liquidity pool (optional lender deposits)
+    mapping(address => uint256) public lenderBalances;
+    uint256 public totalLiquidity;
+
+    // Contract references
+    KYCRegistry public kycRegistry;
+    CreditScore public creditScore;
+    CollateralManager public collateralManager;
+
+    // Minimum credit score for loan eligibility
+    uint256 public constant MIN_CREDIT_SCORE = 600;
+
+    // Basis points denominator
+    uint256 private constant BPS_DENOMINATOR = 10_000;
+    uint256 private constant SECONDS_PER_DAY = 1 days;
+
+    // Loan type specific configuration
+    mapping(LoanType => LoanConfig) public loanConfigs;
+
+    // Events
+    event LoanRequested(uint256 indexed loanId, address indexed borrower, LoanType loanType, uint256 amount, uint256 duration, bool collateralRequired);
+    event LoanApproved(uint256 indexed loanId, address indexed borrower);
+    event LoanRepaid(uint256 indexed loanId, address indexed borrower, uint256 amount, uint256 interestPaid);
+    event LoanDefaulted(uint256 indexed loanId, address indexed borrower, uint256 timestamp);
+    event LiquidityDeposited(address indexed lender, uint256 amount);
+    event LiquidityWithdrawn(address indexed lender, uint256 amount);
+
+    constructor(address _kycRegistry, address _creditScore, address _collateralManager) {
+        kycRegistry = KYCRegistry(_kycRegistry);
+        creditScore = CreditScore(_creditScore);
+        collateralManager = CollateralManager(_collateralManager);
+
+        // Set some sane defaults for loan configs (can be updated by owner)
+        loanConfigs[LoanType.Personal] = LoanConfig({
+            interestRateBps: 800, // 8% APR
+            collateralRatioBps: 0,
+            maxDurationDays: 365,
+            enabled: true
+        });
+
+        loanConfigs[LoanType.Home] = LoanConfig({
+            interestRateBps: 500, // 5% APR
+            collateralRatioBps: 5000, // 50%
+            maxDurationDays: 3650,
+            enabled: true
+        });
+
+        loanConfigs[LoanType.Business] = LoanConfig({
+            interestRateBps: 1000, // 10% APR
+            collateralRatioBps: 3000, // 30%
+            maxDurationDays: 1095,
+            enabled: true
+        });
+    }
+
+    /**
+     * @dev Owner can update configuration for a loan type
+     */
+    function setLoanConfig(
+        LoanType loanType,
+        uint256 interestRateBps,
+        uint256 collateralRatioBps,
+        uint256 maxDurationDays,
+        bool enabled
+    ) external onlyOwner {
+        require(collateralRatioBps <= BPS_DENOMINATOR, "LoanManager: Invalid collateral ratio");
+        loanConfigs[loanType] = LoanConfig({
+            interestRateBps: interestRateBps,
+            collateralRatioBps: collateralRatioBps,
+            maxDurationDays: maxDurationDays,
+            enabled: enabled
+        });
+    }
+
+    /**
+     * @dev Optional liquidity deposit from lenders
+     */
+    function depositLiquidity() external payable nonReentrant {
+        require(msg.value > 0, "LoanManager: Amount must be greater than 0");
+        lenderBalances[msg.sender] += msg.value;
+        totalLiquidity += msg.value;
+        emit LiquidityDeposited(msg.sender, msg.value);
+    }
+
+    /**
+     * @dev Withdraw liquidity by lenders
+     */
+    function withdrawLiquidity(uint256 amount) external nonReentrant {
+        require(amount > 0, "LoanManager: Amount must be greater than 0");
+        require(lenderBalances[msg.sender] >= amount, "LoanManager: Insufficient balance");
+        require(totalLiquidity >= amount, "LoanManager: Insufficient pool liquidity");
+
+        lenderBalances[msg.sender] -= amount;
+        totalLiquidity -= amount;
+
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        require(success, "LoanManager: Withdraw transfer failed");
+
+        emit LiquidityWithdrawn(msg.sender, amount);
+    }
+
+    /**
+     * @dev Request a new loan
+     * @param loanType Type of loan (Personal, Home, Business)
+     * @param amount Loan amount in wei
+     * @param duration Loan duration in days
+     */
+    function requestLoan(LoanType loanType, uint256 amount, uint256 duration) external returns (uint256) {
+        require(kycRegistry.isVerified(msg.sender), "LoanManager: User must be KYC verified");
+        require(creditScore.getScore(msg.sender) >= MIN_CREDIT_SCORE, "LoanManager: Credit score must be at least 600");
+        require(amount > 0, "LoanManager: Loan amount must be greater than 0");
+        require(duration > 0, "LoanManager: Duration must be greater than 0");
+        LoanConfig memory cfg = loanConfigs[loanType];
+        require(cfg.enabled, "LoanManager: Loan type disabled");
+        require(duration <= cfg.maxDurationDays, "LoanManager: Duration exceeds maximum for this loan type");
+
+        bool collateralRequired = cfg.collateralRatioBps > 0;
+
+        // simple interest calculation prorated by days: interest = amount * rate * days / (365 * 10_000)
+        uint256 interest = (amount * cfg.interestRateBps * duration) / (365 * BPS_DENOMINATOR);
+        uint256 totalRepayment = amount + interest;
+
+        uint256 dueDate = block.timestamp + (duration * SECONDS_PER_DAY);
+
+        loanCounter++;
+        uint256 newLoanId = loanCounter;
+
+        loans[newLoanId] = Loan({
+            loanId: newLoanId,
+            borrower: msg.sender,
+            loanType: loanType,
+            amount: amount,
+            duration: duration,
+            collateralRequired: collateralRequired,
+            approved: false,
+            repaid: false,
+            collateralAmount: 0,
+            interestRateBps: cfg.interestRateBps,
+            dueDate: dueDate,
+            totalRepayment: totalRepayment,
+            defaulted: false
+        });
+
+        if (collateralRequired) {
+            collateralManager.registerLoan(newLoanId, msg.sender);
+        }
+
+        emit LoanRequested(newLoanId, msg.sender, loanType, amount, duration, collateralRequired);
+        return newLoanId;
+    }
+
+    /**
+     * @dev Approve a loan (admin only)
+     * @param loanId The ID of the loan to approve
+     */
+    function approveLoan(uint256 loanId) external onlyOwner nonReentrant {
+        Loan storage loan = loans[loanId];
+        require(loan.borrower != address(0), "LoanManager: Loan does not exist");
+        require(!loan.approved, "LoanManager: Loan already approved");
+        require(!loan.repaid, "LoanManager: Loan already repaid");
+        require(!loan.defaulted, "LoanManager: Loan is defaulted");
+
+        LoanConfig memory cfg = loanConfigs[loan.loanType];
+        if (loan.collateralRequired) {
+            uint256 requiredCollateral = (loan.amount * cfg.collateralRatioBps) / BPS_DENOMINATOR;
+            require(collateralManager.collateralAmount(loanId) >= requiredCollateral, "LoanManager: Insufficient collateral");
+        }
+
+        // ensure pool has enough liquidity to fund the loan, if using pool
+        require(totalLiquidity >= loan.amount, "LoanManager: Insufficient liquidity");
+
+        loan.approved = true;
+
+        // transfer principal to borrower from pool
+        totalLiquidity -= loan.amount;
+        (bool success, ) = payable(loan.borrower).call{value: loan.amount}("");
+        require(success, "LoanManager: Principal transfer failed");
+
+        emit LoanApproved(loanId, loan.borrower);
+    }
+
+    /**
+     * @dev Repay a loan
+     * @param loanId The ID of the loan to repay
+     */
+    function repayLoan(uint256 loanId) external payable nonReentrant {
+        Loan storage loan = loans[loanId];
+        require(loan.borrower == msg.sender, "LoanManager: Only borrower can repay");
+        require(loan.approved, "LoanManager: Loan must be approved first");
+        require(!loan.repaid, "LoanManager: Loan already repaid");
+        require(!loan.defaulted, "LoanManager: Loan is defaulted");
+        require(msg.value >= loan.totalRepayment, "LoanManager: Insufficient repayment amount");
+
+        loan.repaid = true;
+
+        if (loan.collateralRequired) {
+            collateralManager.releaseCollateral(loanId, loan.borrower);
+        }
+
+        // add repayment (principal + interest) back into liquidity pool
+        totalLiquidity += msg.value;
+
+        uint256 interestPaid = loan.totalRepayment - loan.amount;
+        emit LoanRepaid(loanId, msg.sender, loan.totalRepayment, interestPaid);
+    }
+
+    /**
+     * @dev Mark a loan as defaulted if overdue. Can be called by anyone.
+     * Collateral (if any) is seized by the contract owner.
+     */
+    function markLoanDefaulted(uint256 loanId) external nonReentrant {
+        Loan storage loan = loans[loanId];
+        require(loan.borrower != address(0), "LoanManager: Loan does not exist");
+        require(loan.approved, "LoanManager: Loan must be approved");
+        require(!loan.repaid, "LoanManager: Loan already repaid");
+        require(!loan.defaulted, "LoanManager: Loan already defaulted");
+        require(block.timestamp > loan.dueDate, "LoanManager: Loan not overdue yet");
+
+        loan.defaulted = true;
+
+        if (loan.collateralRequired) {
+            collateralManager.seizeCollateral(loanId, owner());
+        }
+
+        emit LoanDefaulted(loanId, loan.borrower, block.timestamp);
+    }
+
+    /**
+     * @dev Get loan details
+     * @param loanId The ID of the loan
+     */
+    function getLoan(uint256 loanId) external view returns (
+        uint256 _loanId,
+        address borrower,
+        LoanType loanType,
+        uint256 amount,
+        uint256 duration,
+        bool collateralRequired,
+        bool approved,
+        bool repaid,
+        uint256 interestRateBps,
+        uint256 dueDate,
+        uint256 totalRepayment,
+        bool defaulted
+    ) {
+        Loan memory loan = loans[loanId];
+        return (
+            loan.loanId,
+            loan.borrower,
+            loan.loanType,
+            loan.amount,
+            loan.duration,
+            loan.collateralRequired,
+            loan.approved,
+            loan.repaid,
+            loan.interestRateBps,
+            loan.dueDate,
+            loan.totalRepayment,
+            loan.defaulted
+        );
+    }
+}
