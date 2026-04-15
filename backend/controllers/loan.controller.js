@@ -36,6 +36,20 @@ exports.requestLoan = async (req, res, next) => {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+
+    // Attempt to sync latest credit score from blockchain if wallet address exists
+    if (user.walletAddress) {
+      try {
+        const chainScore = await blockchainService.getCreditScoreFromBlockchain(user.walletAddress);
+        if (chainScore !== user.creditScore) {
+          user.creditScore = chainScore;
+          await user.save();
+        }
+      } catch (err) {
+        console.error('Failed to sync credit score from blockchain:', err.message);
+      }
+    }
+
     if (!user.kycVerified) {
       return res.status(400).json({
         success: false,
@@ -51,7 +65,7 @@ exports.requestLoan = async (req, res, next) => {
     if (user.creditScore < 600) {
       return res.status(400).json({
         success: false,
-        message: 'Credit score must be at least 600 to apply for a loan',
+        message: `Credit score too low (${user.creditScore}). Minimum 600 required.`,
       });
     }
 

@@ -13,21 +13,28 @@ const fs = require('fs');
 exports.upload = async (req, res, next) => {
   try {
     const userId = req.user._id;
-    const { documentUrl, documentType } = req.body;
-
-    if (!documentUrl) {
+    const { aadhaarNumber, documentType } = req.body;
+    
+    if (!aadhaarNumber) {
       return res.status(400).json({
         success: false,
-        message: 'Document URL is required',
+        message: 'Aadhaar number is required',
       });
     }
 
-    const kyc = await kycService.uploadKYC(userId, documentUrl, documentType || 'id_card');
+    if (!/^\d{12}$/.test(aadhaarNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Aadhaar format. Must be 12 digits.',
+      });
+    }
+
+    const kyc = await kycService.uploadKYC(userId, null, aadhaarNumber, documentType || 'id_card');
     res.status(201).json({
       success: true,
       data: {
         status: kyc.status,
-        documentUrl: kyc.documentUrl,
+        aadhaarNumber: kyc.aadhaarNumber,
         documentType: kyc.documentType,
       },
     });
@@ -43,9 +50,11 @@ exports.upload = async (req, res, next) => {
 exports.verify = async (req, res, next) => {
   try {
     const { userId } = req.body;
-    const targetUserId = userId || req.user._id;
+    const currentUserId = req.user._id.toString();
+    const targetUserId = userId || currentUserId;
 
-    if (req.user.role !== 'admin' && targetUserId !== req.user._id.toString()) {
+    // Fix: Allow users to verify themselves OR admins to verify anyone
+    if (req.user.role !== 'admin' && targetUserId !== currentUserId) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to verify this user',

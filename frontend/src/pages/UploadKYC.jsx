@@ -3,7 +3,8 @@ import api from '../services/api';
 import { FileCheck, Upload, CheckCircle } from 'lucide-react';
 
 export default function UploadKYC() {
-  const [documentUrl, setDocumentUrl] = useState('');
+  const { refreshUser } = useAuth();
+  const [aadhaarNumber, setAadhaarNumber] = useState('');
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -11,19 +12,25 @@ export default function UploadKYC() {
   useEffect(() => {
     api
       .get('/kyc/status')
-      .then((res) => setStatus(res.data))
+      .then((res) => setStatus(res.data.data))
       .catch(() => setStatus({ status: 'not_submitted' }));
   }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    if (!/^\d{12}$/.test(aadhaarNumber)) {
+      setError('Aadhaar number must be exactly 12 digits');
+      return;
+    }
+
     setLoading(true);
     try {
-      await api.post('/kyc/upload', { documentUrl, documentType: 'id_card' });
-      setStatus({ status: 'pending', documentUrl });
+      await api.post('/kyc/upload', { aadhaarNumber, documentType: 'id_card' });
+      setStatus({ status: 'pending', aadhaarNumber });
     } catch (err) {
-      setError(err.message || 'Upload failed');
+      setError(err.response?.data?.message || err.message || 'Upload failed');
     } finally {
       setLoading(false);
     }
@@ -34,9 +41,11 @@ export default function UploadKYC() {
     setLoading(true);
     try {
       await api.post('/kyc/verify');
+      // Sync global user state so Apply page knows we are verified
+      await refreshUser();
       setStatus((s) => ({ ...s, status: 'verified' }));
     } catch (err) {
-      setError(err.message || 'Verification failed');
+      setError(err.response?.data?.message || err.message || 'Verification failed');
     } finally {
       setLoading(false);
     }
@@ -46,7 +55,7 @@ export default function UploadKYC() {
     <div className="mx-auto max-w-2xl">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-white">KYC Verification</h1>
-        <p className="mt-1 text-slate-400">Upload your identity document to verify your account</p>
+        <p className="mt-1 text-slate-400">Enter your Aadhaar number to verify your account</p>
       </div>
 
       <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-8">
@@ -65,16 +74,14 @@ export default function UploadKYC() {
             )}
             <form onSubmit={handleSubmit} className="space-y-6">
               <div>
-                <label className="block text-sm font-medium text-slate-300">Document URL</label>
-                <p className="mt-1 text-xs text-slate-500">
-                  For local testing, use a path like /uploads/doc.pdf or a public URL
-                </p>
+                <label className="block text-sm font-medium text-slate-300">Aadhaar Number (12 Digits)</label>
                 <input
                   type="text"
-                  value={documentUrl}
-                  onChange={(e) => setDocumentUrl(e.target.value)}
+                  maxLength="12"
+                  value={aadhaarNumber}
+                  onChange={(e) => setAadhaarNumber(e.target.value.replace(/\D/g, ''))}
                   className="mt-2 w-full rounded-lg border border-slate-600 bg-slate-900 px-4 py-3 text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                  placeholder="https://example.com/id-document.pdf"
+                  placeholder="123456789012"
                   required
                 />
               </div>
@@ -85,7 +92,7 @@ export default function UploadKYC() {
                   className="flex items-center gap-2 rounded-lg bg-primary-600 px-6 py-3 font-medium text-white hover:bg-primary-500 disabled:opacity-50"
                 >
                   <Upload className="h-4 w-4" />
-                  {loading ? 'Uploading...' : 'Upload Document'}
+                  {loading ? 'Submitting...' : 'Upload Aadhaar'}
                 </button>
                 {status?.status === 'pending' && (
                   <button
