@@ -3,6 +3,9 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "./KYCRegistry.sol";
+import "./CreditScore.sol";
+import "./CollateralManager.sol";
 
 /**
  * @title LoanManager
