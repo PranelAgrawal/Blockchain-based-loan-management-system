@@ -7,7 +7,6 @@ import "./KYCRegistry.sol";
 import "./CreditScore.sol";
 import "./CollateralManager.sol";
 import "./BlockManager.sol";
-import "./BlockManager.sol";
 
 /**
  * @title LoanManager

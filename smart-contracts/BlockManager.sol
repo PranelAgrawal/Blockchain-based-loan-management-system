@@ -42,7 +42,7 @@ contract BlockManager {
     ) external {
         uint256 newTxId = txCounter++;
 
-        Transaction memory tx = Transaction({
+        Transaction memory loanTransaction = Transaction({
             txId: newTxId,
             user: user,
             txType: txType,
@@ -51,7 +51,7 @@ contract BlockManager {
             description: description
         });
 
-        pendingTransactions[pendingTxCount].push(tx);
+        pendingTransactions[pendingTxCount].push(loanTransaction);
 
         emit TransactionAdded(newTxId, user, txType, amount);
 

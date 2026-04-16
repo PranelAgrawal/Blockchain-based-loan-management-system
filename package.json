@@ -6,7 +6,11 @@
   "scripts": {
     "backend": "cd backend && npm run dev",
     "frontend": "cd frontend && npm run dev",
-    "deploy": "npx hardhat run scripts/deploy.js --network localhost"
+    "node": "npx hardhat node --hostname 127.0.0.1",
+    "compile": "npx hardhat compile",
+    "deploy": "npx hardhat run scripts/deploy.js --network localhost",
+    "blocks": "npx hardhat run scripts/block-demo.js --network localhost",
+    "blocks:local": "npx hardhat run scripts/block-demo.js"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",

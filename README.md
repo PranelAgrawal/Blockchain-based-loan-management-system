@@ -67,16 +67,40 @@ npx hardhat run scripts/deploy.js --network localhost
 
 Copy the printed addresses to your `.env` files.
 
+### 2. Display Loan Blocks Locally
+
+The project includes a runnable block demo for the loan blockchain. By default it creates 20 loan-chain transactions per user for 2 users. `BlockManager` groups every 10 loan-chain transactions into a block, then prints each block hash, previous hash, timestamp, transaction list, and integrity status.
+
+```bash
+# Terminal 1: start Hardhat with live RPC/transaction logs
+npm run node
+
+# Terminal 2: deploy a demo system, create transactions, and display blocks
+npm run blocks
+```
+
+For a quick one-terminal run on Hardhat's in-memory network:
+
+```bash
+npm run blocks:local
+```
+
+You can adjust the demo size:
+
+```bash
+LOAN_EVENTS_PER_USER=20 USERS_TO_SIMULATE=2 npm run blocks:local
+```
+
 **Option B: Using Remix**
 
 1. Open [Remix IDE](https://remix.ethereum.org)
 2. Create files and paste contract code from `smart-contracts/`
 3. Compile with Solidity ^0.8.20
-4. Deploy in order: KYCRegistry → CreditScore → CollateralManager → LoanManager (with 3 constructor args)
+4. Deploy in order: BlockManager → KYCRegistry → CreditScore → CollateralManager → LoanManager (with 4 constructor args)
 5. Call `CollateralManager.setAdmin(LoanManager address)`
 6. Copy all contract addresses
 
-### 2. Run Backend
+### 3. Run Backend
 
 ```bash
 cd backend
@@ -88,7 +112,7 @@ npm run dev
 
 Backend runs on `http://localhost:5000`
 
-### 3. Run Frontend
+### 4. Run Frontend
 
 ```bash
 cd frontend
@@ -100,14 +124,14 @@ npm run dev
 
 Frontend runs on `http://localhost:3000`
 
-### 4. Connect MetaMask
+### 5. Connect MetaMask
 
 1. Install MetaMask
 2. Add local network: RPC `http://127.0.0.1:8545`, Chain ID `31337`
 3. Import test account from Hardhat/Ganache
 4. Connect wallet in the app
 
-### 5. Create Admin User
+### 6. Create Admin User
 
 Register a user, then in MongoDB:
 
