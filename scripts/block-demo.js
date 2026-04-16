@@ -6,7 +6,7 @@ const LOAN_TYPE = {
   Business: 2,
 };
 
-const LOAN_EVENTS_PER_USER = Number(process.env.LOAN_EVENTS_PER_USER || 20);
+const LOAN_EVENTS_PER_USER = Number(process.env.LOAN_EVENTS_PER_USER || 30);
 const USERS_TO_SIMULATE = Number(process.env.USERS_TO_SIMULATE || 2);
 
 function shortAddress(address) {
@@ -118,16 +118,17 @@ async function prepareUsers({ owner, users, kycRegistry, creditScore, loanManage
 }
 
 async function createLoanEventsForUser({ user, userLabel, loanManager, blockManager }) {
-  if (LOAN_EVENTS_PER_USER % 2 !== 0) {
-    throw new Error("LOAN_EVENTS_PER_USER must be even because each loan creates request + approval events.");
+  if (LOAN_EVENTS_PER_USER % 3 !== 0) {
+    throw new Error("LOAN_EVENTS_PER_USER must be divisible by 3 because each loan has request + approval + repayment.");
   }
 
-  const loanCount = LOAN_EVENTS_PER_USER / 2;
+  const loanCount = LOAN_EVENTS_PER_USER / 3;
 
   for (let i = 0; i < loanCount; i++) {
     const amount = ethers.parseEther((0.5 + i * 0.05).toFixed(2));
     const durationDays = 20 + i;
 
+    // STEP 1: Request Loan
     await waitForTx(
       `${userLabel} request personal loan ${i + 1}/${loanCount}`,
       await loanManager.connect(user).requestLoan(LOAN_TYPE.Personal, amount, durationDays),
@@ -136,9 +137,21 @@ async function createLoanEventsForUser({ user, userLabel, loanManager, blockMana
 
     const loanId = await loanManager.loanCounter();
 
+    // STEP 2: Approve Loan
     await waitForTx(
       `${userLabel} approve loan ${loanId}`,
       await loanManager.approveLoan(loanId),
+      blockManager
+    );
+
+    // Get loan details for repayment amount
+    const loanData = await loanManager.getLoan(loanId);
+    const repayAmount = loanData[10]; // totalRepayment is at index 10
+
+    // STEP 3: Repay Loan
+    await waitForTx(
+      `${userLabel} repay loan ${loanId}`,
+      await loanManager.connect(user).repayLoan(loanId, { value: repayAmount }),
       blockManager
     );
   }
