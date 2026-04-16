@@ -12,7 +12,11 @@ const LOAN_TYPE = {
 const LOAN_EVENTS_PER_USER = Number(process.env.LOAN_EVENTS_PER_USER || 30);
 const USERS_TO_SIMULATE = Number(process.env.USERS_TO_SIMULATE || 2);
 const MONGODB_DB = process.env.MONGODB_DB || "blockchainLoan";
-const AADHAAR_COLLECTION = process.env.AADHAAR_COLLECTION || "aadhaarUsers";
+const configuredAadhaarCollection = process.env.AADHAAR_COLLECTION;
+const AADHAAR_COLLECTION =
+  !configuredAadhaarCollection || configuredAadhaarCollection === "aadhaarUsers"
+    ? "users"
+    : configuredAadhaarCollection;
 
 const VERHOEFF_D = [
   [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
@@ -112,9 +116,18 @@ function storeAadhaarInMongo(walletAddress, aadhaarNumber) {
 
   const mongoScript = `
     const targetDb = db.getSiblingDB(${JSON.stringify(MONGODB_DB)});
-    targetDb.getCollection(${JSON.stringify(AADHAAR_COLLECTION)}).updateOne(
+    const users = targetDb.getCollection(${JSON.stringify(AADHAAR_COLLECTION)});
+    for (const indexName of ["email_1", "userId_1"]) {
+      try {
+        users.dropIndex(indexName);
+      } catch (error) {
+        if (error.codeName !== "IndexNotFound") throw error;
+      }
+    }
+    users.createIndex({ address: 1 }, { unique: true });
+    users.replaceOne(
       { address: ${JSON.stringify(walletAddress.toLowerCase())} },
-      { $set: { address: ${JSON.stringify(walletAddress.toLowerCase())}, adhaarNumber: ${JSON.stringify(aadhaarNumber)} } },
+      { address: ${JSON.stringify(walletAddress.toLowerCase())}, adhaarNumber: ${JSON.stringify(aadhaarNumber)} },
       { upsert: true }
     );
   `;
@@ -198,9 +211,10 @@ async function deploySystem() {
   };
 }
 
-async function prepareUsers({ owner, users, kycRegistry, creditScore, loanManager, blockManager }) {
+async function collectAadhaarRecords(users) {
   const selectedUsers = users.slice(0, USERS_TO_SIMULATE);
   const rl = readline.createInterface({ input, output });
+  const userKycRecords = [];
 
   try {
     for (const [index, user] of selectedUsers.entries()) {
@@ -208,24 +222,44 @@ async function prepareUsers({ owner, users, kycRegistry, creditScore, loanManage
       const aadhaarNumber = await askForAadhaar(rl, userLabel, user.address);
       const docHash = getAadhaarDocumentHash(user.address, aadhaarNumber);
 
-      storeAadhaarInMongo(user.address, aadhaarNumber);
-      console.log(
-        `MongoDB saved ${userLabel}: { address, adhaarNumber } in ${MONGODB_DB}.${AADHAAR_COLLECTION}`
-      );
-
-      await waitForTx(
-        `verify KYC for ${userLabel}`,
-        await kycRegistry.connect(owner).verifyUser(user.address, docHash),
-        blockManager
-      );
-      await waitForTx(
-        `set credit score for ${userLabel}`,
-        await creditScore.connect(owner).updateScore(user.address, 760 - index * 20),
-        blockManager
-      );
+      userKycRecords.push({
+        index,
+        user,
+        userLabel,
+        aadhaarNumber,
+        docHash,
+      });
     }
   } finally {
     rl.close();
+  }
+
+  return userKycRecords;
+}
+
+async function prepareUsers({ owner, kycRegistry, creditScore, loanManager, blockManager }, userKycRecords) {
+  console.log("");
+  console.log("========== SAVING AADHAAR RECORDS ==========");
+  for (const record of userKycRecords) {
+    storeAadhaarInMongo(record.user.address, record.aadhaarNumber);
+    console.log(
+      `MongoDB saved ${record.userLabel}: { address, adhaarNumber } in ${MONGODB_DB}.${AADHAAR_COLLECTION}`
+    );
+  }
+
+  console.log("");
+  console.log("========== VERIFYING USERS ON-CHAIN ==========");
+  for (const record of userKycRecords) {
+    await waitForTx(
+      `verify KYC for ${record.userLabel}`,
+      await kycRegistry.connect(owner).verifyUser(record.user.address, record.docHash),
+      blockManager
+    );
+    await waitForTx(
+      `set credit score for ${record.userLabel}`,
+      await creditScore.connect(owner).updateScore(record.user.address, 760 - record.index * 20),
+      blockManager
+    );
   }
 
   await waitForTx(
@@ -234,7 +268,7 @@ async function prepareUsers({ owner, users, kycRegistry, creditScore, loanManage
     blockManager
   );
 
-  return selectedUsers;
+  return userKycRecords.map((record) => record.user);
 }
 
 async function createLoanEventsForUser({ user, userLabel, loanManager, blockManager }) {
@@ -327,6 +361,9 @@ async function displayLoanBlocks(blockManager) {
 }
 
 async function main() {
+  const [, ...users] = await ethers.getSigners();
+  const userKycRecords = await collectAadhaarRecords(users);
+
   console.log("========== DEPLOYING LOAN BLOCKCHAIN SYSTEM ==========");
   const system = await deploySystem();
 
@@ -335,7 +372,7 @@ async function main() {
   console.log(`LoanManager:  ${await system.loanManager.getAddress()}`);
   console.log("");
 
-  const selectedUsers = await prepareUsers(system);
+  const selectedUsers = await prepareUsers(system, userKycRecords);
 
   console.log("");
   console.log("========== CREATING LOAN EVENTS ==========");
