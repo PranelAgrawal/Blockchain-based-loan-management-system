@@ -28,17 +28,14 @@ console.log('\n========== DEPLOYING CONTRACTS ==========\n');
 
 const KYC = await ethers.getContractFactory('KYCRegistry');
 const kyc = await KYC.deploy();
-await kyc.deployed();
 console.log('✓ KYCRegistry deployed at:', await kyc.getAddress());
 
 const CreditScore = await ethers.getContractFactory('CreditScore');
 const credit = await CreditScore.deploy();
-await credit.deployed();
 console.log('✓ CreditScore deployed at:', await credit.getAddress());
 
 const Collateral = await ethers.getContractFactory('CollateralManager');
 const collateral = await Collateral.deploy();
-await collateral.deployed();
 console.log('✓ CollateralManager deployed at:', await collateral.getAddress());
 
 const Loan = await ethers.getContractFactory('LoanManager');
@@ -47,7 +44,6 @@ const loan = await Loan.deploy(
   await credit.getAddress(),
   await collateral.getAddress()
 );
-await loan.deployed();
 console.log('✓ LoanManager deployed at:', await loan.getAddress());
 
 // Set admin for collateral
