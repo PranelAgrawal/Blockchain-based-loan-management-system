@@ -14,13 +14,20 @@ const kycSchema = new mongoose.Schema(
     },
     documentUrl: {
       type: String,
-      required: [true, 'Document URL is required'],
       trim: true,
     },
     documentType: {
       type: String,
       enum: ['passport', 'id_card', 'drivers_license'],
       default: 'id_card',
+    },
+    aadhaarNumber: {
+      type: String,
+      required: [true, 'Aadhaar number is required'],
+      unique: true,
+      sparse: true, // Allow existing records without it initially if needed, but we'll enforce it for new ones
+      trim: true,
+      match: [/^\d{12}$/, 'Aadhaar number must be exactly 12 digits'],
     },
     status: {
       type: String,

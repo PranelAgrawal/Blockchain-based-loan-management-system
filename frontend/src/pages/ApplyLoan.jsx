@@ -41,11 +41,18 @@ export default function ApplyLoan() {
         loanType,
         txHash,
       });
-      if (res.data?.loanId) setCreatedLoanId(res.data.loanId);
-      setSuccess('Loan requested successfully!');
+
+      if (res.data?.data?.loanId) {
+        setCreatedLoanId(res.data.data.loanId);
+      } else if (res.data?.loanId) {
+        setCreatedLoanId(res.data.loanId);
+      }
+
+      setSuccess('Loan requested and recorded on-chain!');
       setStep(collateralRequired ? 2 : 3);
     } catch (err) {
-      setError(err.message || 'Request failed');
+      console.error('Request error:', err);
+      setError(err.response?.data?.message || err.message || 'Request failed');
     } finally {
       setLoading(false);
     }

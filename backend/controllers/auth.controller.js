@@ -29,7 +29,12 @@ exports.register = async (req, res, next) => {
       });
     }
 
-    const existingUser = await User.findOne({ $or: [{ email }, { walletAddress: walletAddress || '' }] });
+    const query = { $or: [{ email }] };
+    if (walletAddress) {
+      query.$or.push({ walletAddress });
+    }
+
+    const existingUser = await User.findOne(query);
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -80,6 +85,7 @@ exports.login = async (req, res, next) => {
 
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
+      console.warn(`Login failed: User not found for email ${email}`);
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
@@ -88,6 +94,7 @@ exports.login = async (req, res, next) => {
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      console.warn(`Login failed: Incorrect password for email ${email}`);
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',

@@ -13,7 +13,11 @@ export function AuthProvider({ children }) {
       api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       api
         .get('/auth/me')
-        .then((res) => setUser(res.data))
+        .then((res) => {
+          // Backend returns { success: true, data: user }
+          const userData = res.data.data || res.data;
+          setUser(userData);
+        })
         .catch(() => {
           localStorage.removeItem('token');
           delete api.defaults.headers.common['Authorization'];
@@ -22,14 +26,27 @@ export function AuthProvider({ children }) {
     } else {
       setLoading(false);
     }
-  }, []); 
+  }, []);
+
+  const refreshUser = async () => {
+    try {
+      const res = await api.get('/auth/me');
+      const userData = res.data.data || res.data;
+      setUser(userData);
+      return userData;
+    } catch (err) {
+      console.error('Failed to refresh user profile:', err);
+    }
+  };
 
   const login = async (email, password) => {
     const res = await api.post('/auth/login', { email, password });
-    if (!res.success) {
-      throw new Error(res.message || 'Login failed');
+    // axios response might be res.data
+    const responseData = res.data || res;
+    if (!responseData.success) {
+      throw new Error(responseData.message || 'Login failed');
     }
-    const { token, ...userData } = res.data;
+    const { token, ...userData } = responseData.data;
     localStorage.setItem('token', token);
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     setUser(userData);
@@ -38,10 +55,11 @@ export function AuthProvider({ children }) {
 
   const register = async (name, email, password, walletAddress) => {
     const res = await api.post('/auth/register', { name, email, password, walletAddress });
-    if (!res.success) {
-      throw new Error(res.message || 'Registration failed');
+    const responseData = res.data || res;
+    if (!responseData.success) {
+      throw new Error(responseData.message || 'Registration failed');
     }
-    const { token, ...userData } = res.data;
+    const { token, ...userData } = responseData.data;
     localStorage.setItem('token', token);
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     setUser(userData);
@@ -59,7 +77,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, updateUser }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, updateUser, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
