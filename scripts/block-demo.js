@@ -1,4 +1,7 @@
 const { ethers } = require("hardhat");
+const readline = require("node:readline/promises");
+const { stdin: input, stdout: output } = require("node:process");
+const { spawnSync } = require("node:child_process");
 
 const LOAN_TYPE = {
   Personal: 0,
@@ -8,6 +11,32 @@ const LOAN_TYPE = {
 
 const LOAN_EVENTS_PER_USER = Number(process.env.LOAN_EVENTS_PER_USER || 30);
 const USERS_TO_SIMULATE = Number(process.env.USERS_TO_SIMULATE || 2);
+const MONGODB_DB = process.env.MONGODB_DB || "blockchainLoan";
+const AADHAAR_COLLECTION = process.env.AADHAAR_COLLECTION || "aadhaarUsers";
+
+const VERHOEFF_D = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+  [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+  [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+  [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+  [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+  [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+  [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+  [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+  [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+];
+
+const VERHOEFF_P = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+  [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+  [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+  [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+  [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+  [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+  [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
+];
 
 function shortAddress(address) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -19,6 +48,84 @@ function shortHash(hash) {
 
 function formatBlockTime(timestamp) {
   return new Date(Number(timestamp) * 1000).toLocaleString();
+}
+
+function normalizeAadhaar(aadhaarNumber) {
+  return aadhaarNumber.replace(/[\s-]/g, "");
+}
+
+function isValidAadhaar(aadhaarNumber) {
+  const normalized = normalizeAadhaar(aadhaarNumber);
+  if (!/^[2-9][0-9]{11}$/.test(normalized)) {
+    return false;
+  }
+
+  let checksum = 0;
+  const reversedDigits = normalized.split("").reverse().map(Number);
+
+  for (let i = 0; i < reversedDigits.length; i++) {
+    checksum = VERHOEFF_D[checksum][VERHOEFF_P[i % 8][reversedDigits[i]]];
+  }
+
+  return checksum === 0;
+}
+
+function getAadhaarDocumentHash(walletAddress, aadhaarNumber) {
+  return ethers.keccak256(
+    ethers.solidityPacked(
+      ["address", "string"],
+      [walletAddress, normalizeAadhaar(aadhaarNumber)]
+    )
+  );
+}
+
+async function askForAadhaar(rl, userLabel, walletAddress) {
+  const envKey = `AADHAAR_${userLabel.toUpperCase()}`;
+  const configuredAadhaar = process.env[envKey];
+
+  if (configuredAadhaar) {
+    if (!isValidAadhaar(configuredAadhaar)) {
+      throw new Error(`${envKey} is not a valid Aadhaar number.`);
+    }
+    console.log(`${userLabel} Aadhaar loaded from ${envKey}`);
+    return normalizeAadhaar(configuredAadhaar);
+  }
+
+  while (true) {
+    const answer = await rl.question(
+      `Enter Aadhaar number for ${userLabel} (${shortAddress(walletAddress)}): `
+    );
+    const normalized = normalizeAadhaar(answer);
+
+    if (isValidAadhaar(normalized)) {
+      return normalized;
+    }
+
+    console.log("Invalid Aadhaar number. Enter a 12-digit Aadhaar that passes checksum validation.");
+  }
+}
+
+function storeAadhaarInMongo(walletAddress, aadhaarNumber) {
+  if (!process.env.MONGODB_URI) {
+    throw new Error("MONGODB_URI is missing in .env. Add your MongoDB Compass connection URL first.");
+  }
+
+  const mongoScript = `
+    const targetDb = db.getSiblingDB(${JSON.stringify(MONGODB_DB)});
+    targetDb.getCollection(${JSON.stringify(AADHAAR_COLLECTION)}).updateOne(
+      { address: ${JSON.stringify(walletAddress.toLowerCase())} },
+      { $set: { address: ${JSON.stringify(walletAddress.toLowerCase())}, adhaarNumber: ${JSON.stringify(aadhaarNumber)} } },
+      { upsert: true }
+    );
+  `;
+
+  const result = spawnSync("mongosh", [process.env.MONGODB_URI, "--quiet", "--eval", mongoScript], {
+    encoding: "utf8",
+  });
+
+  if (result.status !== 0) {
+    throw new Error(`MongoDB insert failed: ${result.stderr || result.stdout}`);
+  }
 }
 
 async function waitForTx(label, tx, blockManager) {
@@ -93,19 +200,32 @@ async function deploySystem() {
 
 async function prepareUsers({ owner, users, kycRegistry, creditScore, loanManager, blockManager }) {
   const selectedUsers = users.slice(0, USERS_TO_SIMULATE);
-  const docHash = ethers.keccak256(ethers.toUtf8Bytes("demo-kyc-document"));
+  const rl = readline.createInterface({ input, output });
 
-  for (const [index, user] of selectedUsers.entries()) {
-    await waitForTx(
-      `verify KYC for User${index + 1}`,
-      await kycRegistry.connect(owner).verifyUser(user.address, docHash),
-      blockManager
-    );
-    await waitForTx(
-      `set credit score for User${index + 1}`,
-      await creditScore.connect(owner).updateScore(user.address, 760 - index * 20),
-      blockManager
-    );
+  try {
+    for (const [index, user] of selectedUsers.entries()) {
+      const userLabel = `User${index + 1}`;
+      const aadhaarNumber = await askForAadhaar(rl, userLabel, user.address);
+      const docHash = getAadhaarDocumentHash(user.address, aadhaarNumber);
+
+      storeAadhaarInMongo(user.address, aadhaarNumber);
+      console.log(
+        `MongoDB saved ${userLabel}: { address, adhaarNumber } in ${MONGODB_DB}.${AADHAAR_COLLECTION}`
+      );
+
+      await waitForTx(
+        `verify KYC for ${userLabel}`,
+        await kycRegistry.connect(owner).verifyUser(user.address, docHash),
+        blockManager
+      );
+      await waitForTx(
+        `set credit score for ${userLabel}`,
+        await creditScore.connect(owner).updateScore(user.address, 760 - index * 20),
+        blockManager
+      );
+    }
+  } finally {
+    rl.close();
   }
 
   await waitForTx(

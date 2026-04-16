@@ -69,7 +69,7 @@ Copy the printed addresses to your `.env` files.
 
 ### 2. Display Loan Blocks Locally
 
-The project includes a runnable block demo for the loan blockchain. By default it creates 20 loan-chain transactions per user for 2 users. `BlockManager` groups every 10 loan-chain transactions into a block, then prints each block hash, previous hash, timestamp, transaction list, and integrity status.
+The project includes a runnable block demo for the loan blockchain. It asks for Aadhaar numbers for each simulated user, validates them, stores `{ address, adhaarNumber }` in MongoDB, verifies KYC on-chain using an Aadhaar-based document hash, then creates loan-chain transactions. By default it creates 30 loan-chain transactions per user for 2 users. `BlockManager` groups every 10 loan-chain transactions into a block, then prints each block hash, previous hash, timestamp, transaction list, and integrity status.
 
 ```bash
 # Terminal 1: start Hardhat with live RPC/transaction logs
@@ -89,6 +89,12 @@ You can adjust the demo size:
 
 ```bash
 LOAN_EVENTS_PER_USER=20 USERS_TO_SIMULATE=2 npm run blocks:local
+```
+
+For repeat runs without typing Aadhaar numbers each time, add valid test Aadhaar numbers through environment variables:
+
+```bash
+AADHAAR_USER1=234567890124 AADHAAR_USER2=345678901238 npm run blocks:local
 ```
 
 **Option B: Using Remix**
