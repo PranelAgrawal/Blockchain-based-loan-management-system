@@ -9,7 +9,6 @@ const LOAN_TYPE = {
   Business: 2,
 };
 
-const LOAN_EVENTS_PER_USER = Number(process.env.LOAN_EVENTS_PER_USER || 30);
 const USERS_TO_SIMULATE = Number(process.env.USERS_TO_SIMULATE || 2);
 const MONGODB_DB = process.env.MONGODB_DB || "blockchainLoan";
 const configuredAadhaarCollection = process.env.AADHAAR_COLLECTION;
@@ -17,6 +16,9 @@ const AADHAAR_COLLECTION =
   !configuredAadhaarCollection || configuredAadhaarCollection === "aadhaarUsers"
     ? "users"
     : configuredAadhaarCollection;
+const MIN_CREDIT_SCORE = 600n;
+const BPS_DENOMINATOR = 10_000n;
+const LOAN_TYPE_LABELS = ["Personal", "Home", "Business"];
 
 const VERHOEFF_D = [
   [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
@@ -52,6 +54,20 @@ function shortHash(hash) {
 
 function formatBlockTime(timestamp) {
   return new Date(Number(timestamp) * 1000).toLocaleString();
+}
+
+function formatLoanTypeOptions() {
+  return LOAN_TYPE_LABELS.map((label, index) => `${index}=${label}`).join(", ");
+}
+
+function normalizeLoanType(value) {
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === "0" || normalized === "personal") return LOAN_TYPE.Personal;
+  if (normalized === "1" || normalized === "home") return LOAN_TYPE.Home;
+  if (normalized === "2" || normalized === "business") return LOAN_TYPE.Business;
+
+  return null;
 }
 
 function normalizeAadhaar(aadhaarNumber) {
@@ -106,6 +122,93 @@ async function askForAadhaar(rl, userLabel, walletAddress) {
     }
 
     console.log("Invalid Aadhaar number. Enter a 12-digit Aadhaar that passes checksum validation.");
+  }
+}
+
+async function askForLoanRequest(rl, userLabel, loanManager) {
+  const envPrefix = userLabel.toUpperCase();
+  const configuredLoanType = process.env[`LOAN_TYPE_${envPrefix}`];
+  const configuredAmount = process.env[`LOAN_AMOUNT_${envPrefix}`];
+  const configuredDuration = process.env[`LOAN_DURATION_${envPrefix}`];
+
+  while (true) {
+    const loanTypeAnswer =
+      configuredLoanType ||
+      (await rl.question(
+        `Enter loan type for ${userLabel} (${formatLoanTypeOptions()}): `
+      ));
+    const loanType = normalizeLoanType(loanTypeAnswer);
+
+    if (loanType === null) {
+      console.log(`Invalid loan type. Use one of: ${formatLoanTypeOptions()}`);
+      if (configuredLoanType) throw new Error(`LOAN_TYPE_${envPrefix} is invalid.`);
+      continue;
+    }
+
+    const config = await loanManager.loanConfigs(loanType);
+    const enabled = config.enabled ?? config[3];
+    const maxDurationDays = config.maxDurationDays ?? config[2];
+    const collateralRatioBps = config.collateralRatioBps ?? config[1];
+
+    if (!enabled) {
+      console.log(`${LOAN_TYPE_LABELS[loanType]} loans are disabled.`);
+      if (configuredLoanType) throw new Error(`${LOAN_TYPE_LABELS[loanType]} loans are disabled.`);
+      continue;
+    }
+
+    const amountAnswer =
+      configuredAmount || (await rl.question(`Enter loan amount in ETH for ${userLabel}: `));
+    let amount;
+    try {
+      amount = ethers.parseEther(amountAnswer.trim());
+    } catch (_) {
+      console.log("Invalid amount. Enter a positive ETH value, for example 1.5");
+      if (configuredAmount) throw new Error(`LOAN_AMOUNT_${envPrefix} is invalid.`);
+      continue;
+    }
+
+    if (amount <= 0n) {
+      console.log("Loan amount must be greater than 0.");
+      if (configuredAmount) throw new Error(`LOAN_AMOUNT_${envPrefix} must be greater than 0.`);
+      continue;
+    }
+
+    const durationAnswer =
+      configuredDuration || (await rl.question(`Enter loan duration in days for ${userLabel}: `));
+    const durationDays = Number(durationAnswer);
+
+    if (!Number.isInteger(durationDays) || durationDays <= 0) {
+      console.log("Duration must be a positive whole number of days.");
+      if (configuredDuration) throw new Error(`LOAN_DURATION_${envPrefix} is invalid.`);
+      continue;
+    }
+
+    if (BigInt(durationDays) > maxDurationDays) {
+      console.log(
+        `${LOAN_TYPE_LABELS[loanType]} loan duration must be ${maxDurationDays.toString()} days or less.`
+      );
+      if (configuredDuration) throw new Error(`LOAN_DURATION_${envPrefix} exceeds max duration.`);
+      continue;
+    }
+
+    const requiredCollateral = (amount * collateralRatioBps) / BPS_DENOMINATOR;
+
+    console.log(
+      `${userLabel} loan input accepted: ${LOAN_TYPE_LABELS[loanType]}, ${ethers.formatEther(amount)} ETH, ${durationDays} days`
+    );
+
+    if (requiredCollateral > 0n) {
+      console.log(
+        `${userLabel} required collateral: ${ethers.formatEther(requiredCollateral)} ETH`
+      );
+    }
+
+    return {
+      loanType,
+      amount,
+      durationDays,
+      requiredCollateral,
+    };
   }
 }
 
@@ -260,6 +363,12 @@ async function prepareUsers({ owner, kycRegistry, creditScore, loanManager, bloc
       await creditScore.connect(owner).updateScore(record.user.address, 760 - record.index * 20),
       blockManager
     );
+
+    const score = await creditScore.getScore(record.user.address);
+    console.log(`${record.userLabel} credit score checked: ${score.toString()}`);
+    if (score < MIN_CREDIT_SCORE) {
+      throw new Error(`${record.userLabel} credit score is below ${MIN_CREDIT_SCORE.toString()}. Loan flow stopped.`);
+    }
   }
 
   await waitForTx(
@@ -271,44 +380,39 @@ async function prepareUsers({ owner, kycRegistry, creditScore, loanManager, bloc
   return userKycRecords.map((record) => record.user);
 }
 
-async function createLoanEventsForUser({ user, userLabel, loanManager, blockManager }) {
-  if (LOAN_EVENTS_PER_USER % 3 !== 0) {
-    throw new Error("LOAN_EVENTS_PER_USER must be divisible by 3 because each loan has request + approval + repayment.");
-  }
+async function createLoanEventsForUser({
+  user,
+  userLabel,
+  loanManager,
+  collateralManager,
+  blockManager,
+  loanRequest,
+}) {
+  await waitForTx(
+    `${userLabel} request ${LOAN_TYPE_LABELS[loanRequest.loanType]} loan`,
+    await loanManager
+      .connect(user)
+      .requestLoan(loanRequest.loanType, loanRequest.amount, loanRequest.durationDays),
+    blockManager
+  );
 
-  const loanCount = LOAN_EVENTS_PER_USER / 3;
+  const loanId = await loanManager.loanCounter();
 
-  for (let i = 0; i < loanCount; i++) {
-    const amount = ethers.parseEther((0.5 + i * 0.05).toFixed(2));
-    const durationDays = 20 + i;
-
-    // STEP 1: Request Loan
+  if (loanRequest.requiredCollateral > 0n) {
     await waitForTx(
-      `${userLabel} request personal loan ${i + 1}/${loanCount}`,
-      await loanManager.connect(user).requestLoan(LOAN_TYPE.Personal, amount, durationDays),
-      blockManager
-    );
-
-    const loanId = await loanManager.loanCounter();
-
-    // STEP 2: Approve Loan
-    await waitForTx(
-      `${userLabel} approve loan ${loanId}`,
-      await loanManager.approveLoan(loanId),
-      blockManager
-    );
-
-    // Get loan details for repayment amount
-    const loanData = await loanManager.getLoan(loanId);
-    const repayAmount = loanData[10]; // totalRepayment is at index 10
-
-    // STEP 3: Repay Loan
-    await waitForTx(
-      `${userLabel} repay loan ${loanId}`,
-      await loanManager.connect(user).repayLoan(loanId, { value: repayAmount }),
+      `${userLabel} deposit collateral for loan ${loanId}`,
+      await collateralManager
+        .connect(user)
+        .depositCollateral(loanId, { value: loanRequest.requiredCollateral }),
       blockManager
     );
   }
+
+  await waitForTx(
+    `${userLabel} approve loan ${loanId}`,
+    await loanManager.approveLoan(loanId),
+    blockManager
+  );
 }
 
 async function displayLoanBlocks(blockManager) {
@@ -348,9 +452,10 @@ async function displayLoanBlocks(blockManager) {
   }
 
   const isValid = await blockManager.verifyBlockchain();
+  const totalLoanTransactions = await blockManager.txCounter();
   console.log("========== SUMMARY ==========");
   console.log(`Loan-chain blocks:       ${finalizedBlocks}`);
-  console.log(`Loan-chain transactions: ${LOAN_EVENTS_PER_USER * USERS_TO_SIMULATE}`);
+  console.log(`Loan-chain transactions: ${totalLoanTransactions}`);
   console.log(`Users simulated:         ${USERS_TO_SIMULATE}`);
   console.log(`Integrity check:         ${isValid ? "VALID" : "BROKEN"}`);
   console.log(`Pending transactions:    ${await blockManager.getPendingTransactions()}`);
@@ -377,15 +482,28 @@ async function main() {
   console.log("");
   console.log("========== CREATING LOAN EVENTS ==========");
   console.log(`Users: ${USERS_TO_SIMULATE}`);
-  console.log(`Loan-chain transactions per user: ${LOAN_EVENTS_PER_USER}`);
   console.log("");
+
+  const rl = readline.createInterface({ input, output });
+  const loanRequests = [];
+  try {
+    for (const [index, user] of selectedUsers.entries()) {
+      loanRequests.push(
+        await askForLoanRequest(rl, `User${index + 1}`, system.loanManager)
+      );
+    }
+  } finally {
+    rl.close();
+  }
 
   for (const [index, user] of selectedUsers.entries()) {
     await createLoanEventsForUser({
       user,
       userLabel: `User${index + 1}`,
       loanManager: system.loanManager,
+      collateralManager: system.collateralManager,
       blockManager: system.blockManager,
+      loanRequest: loanRequests[index],
     });
   }
 
