@@ -160,6 +160,10 @@ contract LoanManager is Ownable, ReentrancyGuard {
         require(creditScore.getScore(msg.sender) >= MIN_CREDIT_SCORE, "LoanManager: Credit score must be at least 600");
         require(amount > 0, "LoanManager: Loan amount must be greater than 0");
         require(duration > 0, "LoanManager: Duration must be greater than 0");
+        
+        // Check if user has any active overdue or defaulted loans
+        require(!hasOverdueOrDefaultedLoan(msg.sender), "LoanManager: Cannot request new loan while having overdue/defaulted loan");
+        
         LoanConfig memory cfg = loanConfigs[loanType];
         require(cfg.enabled, "LoanManager: Loan type disabled");
         require(duration <= cfg.maxDurationDays, "LoanManager: Duration exceeds maximum for this loan type");
@@ -257,7 +261,7 @@ contract LoanManager is Ownable, ReentrancyGuard {
     /**
      * @dev Mark a loan as defaulted if overdue. Can be called by anyone.
      * Collateral (if any) is seized by the contract owner.
-     * Credit score is penalized by 100 points.
+     * Credit score is penalized based on days overdue.
      */
     function markLoanDefaulted(uint256 loanId) external nonReentrant {
         Loan storage loan = loans[loanId];
@@ -273,12 +277,68 @@ contract LoanManager is Ownable, ReentrancyGuard {
             collateralManager.seizeCollateral(loanId, owner());
         }
 
-        // Penalize credit score for default (-100 points, minimum 300)
-        uint256 currentScore = creditScore.getScore(loan.borrower);
-        uint256 newScore = currentScore > 100 ? currentScore - 100 : 300;
-        creditScore.updateScore(loan.borrower, newScore);
+        // Penalize credit score: 10 points per day overdue (minimum 300)
+        uint256 daysOverdue = (block.timestamp - loan.dueDate) / SECONDS_PER_DAY;
+        uint256 penalty = (daysOverdue + 1) * 10; // +1 to count the due date day itself
+        
+        creditScore.decreaseScore(loan.borrower, penalty);
 
         emit LoanDefaulted(loanId, loan.borrower, block.timestamp);
+    }
+
+    /**
+     * @dev Repay a loan after due date with late payment penalty
+     * @param loanId The ID of the loan to repay late
+     */
+    function repayLoanLate(uint256 loanId) external payable nonReentrant {
+        Loan storage loan = loans[loanId];
+        require(loan.borrower == msg.sender, "LoanManager: Only borrower can repay");
+        require(loan.approved, "LoanManager: Loan must be approved first");
+        require(!loan.repaid, "LoanManager: Loan already repaid");
+        require(block.timestamp > loan.dueDate, "LoanManager: Use repayLoan for on-time payments");
+        require(msg.value >= loan.totalRepayment, "LoanManager: Insufficient repayment amount");
+
+        // Calculate days late (minimum 1 day)
+        uint256 daysLate = (block.timestamp - loan.dueDate) / SECONDS_PER_DAY;
+        if (daysLate == 0) daysLate = 1;
+
+        // Penalize credit score: 10 points per day late
+        uint256 penalty = daysLate * 10;
+        creditScore.decreaseScore(loan.borrower, penalty);
+
+        // Mark as repaid
+        loan.repaid = true;
+
+        // Clear defaulted status since loan is now repaid
+        loan.defaulted = false;
+
+        if (loan.collateralRequired) {
+            collateralManager.releaseCollateral(loanId, loan.borrower);
+        }
+
+        // Add repayment back into liquidity pool
+        totalLiquidity += msg.value;
+
+        uint256 interestPaid = loan.totalRepayment - loan.amount;
+        emit LoanRepaid(loanId, msg.sender, loan.totalRepayment, interestPaid);
+    }
+
+    /**
+     * @dev Check if user has any active overdue or defaulted loans
+     * @param borrower The address to check
+     * @return bool True if user has overdue/defaulted loans
+     */
+    function hasOverdueOrDefaultedLoan(address borrower) public view returns (bool) {
+        for (uint256 i = 1; i <= loanCounter; i++) {
+            Loan memory loan = loans[i];
+            if (loan.borrower == borrower) {
+                // Check if loan is approved but not repaid and is overdue or defaulted
+                if (loan.approved && !loan.repaid && (loan.defaulted || block.timestamp > loan.dueDate)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
