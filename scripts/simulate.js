@@ -54,12 +54,12 @@ async function runBorrowerLoanFlow({
   collateralManager,
   loanType,
   loanAmount,
-  durationDays,
+  durationSeconds,
   collateralAmount,
 }) {
   await waitForTx(
     `${borrowerName} requested loan`,
-    await loanManager.connect(borrower).requestLoan(loanType, loanAmount, durationDays)
+    await loanManager.connect(borrower).requestLoan(loanType, loanAmount, durationSeconds)
   );
 
   const loanId = await getLatestLoanId(loanManager);
@@ -178,7 +178,7 @@ async function main() {
     collateralManager,
     loanType: LOAN_TYPE.Home,
     loanAmount: ethers.parseEther("5"),
-    durationDays: 180,
+    durationSeconds: 180,
     collateralAmount: ethers.parseEther("2.5"),
   });
 
@@ -190,7 +190,7 @@ async function main() {
     collateralManager,
     loanType: LOAN_TYPE.Business,
     loanAmount: ethers.parseEther("3"),
-    durationDays: 120,
+    durationSeconds: 120,
     collateralAmount: ethers.parseEther("0.9"),
   });
 

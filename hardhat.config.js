@@ -15,7 +15,7 @@ module.exports = {
   networks: {
     hardhat: {
       chainId: 31337,
-      loggingEnabled: true,
+      loggingEnabled: false,
       mining: {
         auto: true,
         interval: 0,

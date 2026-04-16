@@ -24,7 +24,7 @@ contract LoanManager is Ownable, ReentrancyGuard {
     struct LoanConfig {
         uint256 interestRateBps; // annual interest rate in basis points (1% = 100 bps)
         uint256 collateralRatioBps; // required collateral as a percentage of loan amount (in bps)
-        uint256 maxDurationDays; // maximum allowed duration in days
+        uint256 maxDurationSeconds; // maximum allowed duration in seconds
         bool enabled;
     }
 
@@ -64,7 +64,8 @@ contract LoanManager is Ownable, ReentrancyGuard {
 
     // Basis points denominator
     uint256 private constant BPS_DENOMINATOR = 10_000;
-    uint256 private constant SECONDS_PER_DAY = 1 days;
+    uint256 private constant SECONDS_PER_YEAR = 365 days;
+    uint256 private constant ON_TIME_REPAYMENT_REWARD = 10;
 
     // Loan type specific configuration
     mapping(LoanType => LoanConfig) public loanConfigs;
@@ -87,21 +88,21 @@ contract LoanManager is Ownable, ReentrancyGuard {
         loanConfigs[LoanType.Personal] = LoanConfig({
             interestRateBps: 800, // 8% APR
             collateralRatioBps: 0,
-            maxDurationDays: 365,
+            maxDurationSeconds: 3600,
             enabled: true
         });
 
         loanConfigs[LoanType.Home] = LoanConfig({
             interestRateBps: 500, // 5% APR
             collateralRatioBps: 5000, // 50%
-            maxDurationDays: 3650,
+            maxDurationSeconds: 7200,
             enabled: true
         });
 
         loanConfigs[LoanType.Business] = LoanConfig({
             interestRateBps: 1000, // 10% APR
             collateralRatioBps: 3000, // 30%
-            maxDurationDays: 1095,
+            maxDurationSeconds: 5400,
             enabled: true
         });
     }
@@ -113,14 +114,14 @@ contract LoanManager is Ownable, ReentrancyGuard {
         LoanType loanType,
         uint256 interestRateBps,
         uint256 collateralRatioBps,
-        uint256 maxDurationDays,
+        uint256 maxDurationSeconds,
         bool enabled
     ) external onlyOwner {
         require(collateralRatioBps <= BPS_DENOMINATOR, "LoanManager: Invalid collateral ratio");
         loanConfigs[loanType] = LoanConfig({
             interestRateBps: interestRateBps,
             collateralRatioBps: collateralRatioBps,
-            maxDurationDays: maxDurationDays,
+            maxDurationSeconds: maxDurationSeconds,
             enabled: enabled
         });
     }
@@ -156,7 +157,7 @@ contract LoanManager is Ownable, ReentrancyGuard {
      * @dev Request a new loan
      * @param loanType Type of loan (Personal, Home, Business)
      * @param amount Loan amount in wei
-     * @param duration Loan duration in days
+     * @param duration Loan duration in seconds
      */
     function requestLoan(LoanType loanType, uint256 amount, uint256 duration) external returns (uint256) {
         require(kycRegistry.isVerified(msg.sender), "LoanManager: User must be KYC verified");
@@ -169,15 +170,15 @@ contract LoanManager is Ownable, ReentrancyGuard {
         
         LoanConfig memory cfg = loanConfigs[loanType];
         require(cfg.enabled, "LoanManager: Loan type disabled");
-        require(duration <= cfg.maxDurationDays, "LoanManager: Duration exceeds maximum for this loan type");
+        require(duration <= cfg.maxDurationSeconds, "LoanManager: Duration exceeds maximum for this loan type");
 
         bool collateralRequired = cfg.collateralRatioBps > 0;
 
-        // simple interest calculation prorated by days: interest = amount * rate * days / (365 * 10_000)
-        uint256 interest = (amount * cfg.interestRateBps * duration) / (365 * BPS_DENOMINATOR);
+        // Simple interest prorated by seconds over a 365-day year.
+        uint256 interest = (amount * cfg.interestRateBps * duration) / (SECONDS_PER_YEAR * BPS_DENOMINATOR);
         uint256 totalRepayment = amount + interest;
 
-        uint256 dueDate = block.timestamp + (duration * SECONDS_PER_DAY);
+        uint256 dueDate = block.timestamp + duration;
 
         loanCounter++;
         uint256 newLoanId = loanCounter;
@@ -265,6 +266,7 @@ contract LoanManager is Ownable, ReentrancyGuard {
 
         // Log transaction to blockchain
         blockManager.addTransaction(msg.sender, "LoanRepayment", msg.value, "Loan repaid on time");
+        creditScore.increaseScore(loan.borrower, ON_TIME_REPAYMENT_REWARD);
 
         uint256 interestPaid = loan.totalRepayment - loan.amount;
         emit LoanRepaid(loanId, msg.sender, loan.totalRepayment, interestPaid);
@@ -273,7 +275,7 @@ contract LoanManager is Ownable, ReentrancyGuard {
     /**
      * @dev Mark a loan as defaulted if overdue. Can be called by anyone.
      * Collateral (if any) is seized by the contract owner.
-     * Credit score is penalized based on days overdue.
+     * Credit score is penalized based on seconds overdue for demo-friendly timing.
      */
     function markLoanDefaulted(uint256 loanId) external nonReentrant {
         Loan storage loan = loans[loanId];
@@ -289,9 +291,9 @@ contract LoanManager is Ownable, ReentrancyGuard {
             collateralManager.seizeCollateral(loanId, owner());
         }
 
-        // Penalize credit score: 10 points per day overdue (minimum 300)
-        uint256 daysOverdue = (block.timestamp - loan.dueDate) / SECONDS_PER_DAY;
-        uint256 penalty = (daysOverdue + 1) * 10; // +1 to count the due date day itself
+        // Penalize credit score by 1 point per overdue second, with a minimum penalty of 10.
+        uint256 secondsOverdue = block.timestamp - loan.dueDate;
+        uint256 penalty = 10 + secondsOverdue;
         
         creditScore.decreaseScore(loan.borrower, penalty);
 
@@ -313,12 +315,9 @@ contract LoanManager is Ownable, ReentrancyGuard {
         require(block.timestamp > loan.dueDate, "LoanManager: Use repayLoan for on-time payments");
         require(msg.value >= loan.totalRepayment, "LoanManager: Insufficient repayment amount");
 
-        // Calculate days late (minimum 1 day)
-        uint256 daysLate = (block.timestamp - loan.dueDate) / SECONDS_PER_DAY;
-        if (daysLate == 0) daysLate = 1;
-
-        // Penalize credit score: 10 points per day late
-        uint256 penalty = daysLate * 10;
+        // Penalize credit score by 1 point per late second, with a minimum penalty of 10.
+        uint256 secondsLate = block.timestamp - loan.dueDate;
+        uint256 penalty = 10 + secondsLate;
         creditScore.decreaseScore(loan.borrower, penalty);
 
         // Mark as repaid
@@ -333,6 +332,8 @@ contract LoanManager is Ownable, ReentrancyGuard {
 
         // Add repayment back into liquidity pool
         totalLiquidity += msg.value;
+
+        blockManager.addTransaction(msg.sender, "LoanRepayment", msg.value, "Loan repaid late");
 
         uint256 interestPaid = loan.totalRepayment - loan.amount;
         emit LoanRepaid(loanId, msg.sender, loan.totalRepayment, interestPaid);

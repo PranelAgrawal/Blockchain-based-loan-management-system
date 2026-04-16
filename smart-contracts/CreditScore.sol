@@ -39,6 +39,17 @@ contract CreditScore is Ownable {
         creditScores[user] = newScore;
         emit ScoreUpdated(user, newScore);
     }
-}
 
+    function increaseScore(address user, uint256 reward) external {
+        require(msg.sender == loanManager, "CreditScore: Only LoanManager can increase score");
+        require(user != address(0), "CreditScore: Invalid user address");
+        uint256 currentScore = creditScores[user];
+        uint256 newScore = currentScore + reward;
+        if (newScore > MAX_SCORE) {
+            newScore = MAX_SCORE;
+        }
+        creditScores[user] = newScore;
+        emit ScoreUpdated(user, newScore);
+    }
+}
 

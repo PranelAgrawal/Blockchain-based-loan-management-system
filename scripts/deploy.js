@@ -1,7 +1,11 @@
 const { ethers } = require("hardhat");
+const fs = require("node:fs");
+const path = require("node:path");
 
 async function main() {
   const [deployer] = await ethers.getSigners();
+  const network = await ethers.provider.getNetwork();
+  const initialLiquidity = ethers.parseEther(process.env.INITIAL_LIQUIDITY_ETH || "100");
 
   console.log("Deploying loan management contracts");
   console.log(`Deployer: ${deployer.address}`);
@@ -33,14 +37,36 @@ async function main() {
 
   await (await collateralManager.setAdmin(await loanManager.getAddress())).wait();
   await (await creditScore.setLoanManager(await loanManager.getAddress())).wait();
+  await (await loanManager.connect(deployer).depositLiquidity({ value: initialLiquidity })).wait();
+
+  const deployment = {
+    network: "localhost",
+    chainId: network.chainId.toString(),
+    deployer: deployer.address,
+    blockManager: await blockManager.getAddress(),
+    kycRegistry: await kycRegistry.getAddress(),
+    creditScore: await creditScore.getAddress(),
+    collateralManager: await collateralManager.getAddress(),
+    loanManager: await loanManager.getAddress(),
+    initialLiquidityEth: ethers.formatEther(initialLiquidity),
+    deployedAt: new Date().toISOString(),
+  };
+  const deploymentsDir = path.join(__dirname, "..", "deployments");
+  fs.mkdirSync(deploymentsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(deploymentsDir, "localhost.json"),
+    `${JSON.stringify(deployment, null, 2)}\n`
+  );
 
   console.log("");
   console.log("Contracts deployed and configured");
-  console.log(`BLOCK_MANAGER_ADDRESS=${await blockManager.getAddress()}`);
-  console.log(`KYC_REGISTRY_ADDRESS=${await kycRegistry.getAddress()}`);
-  console.log(`CREDIT_SCORE_ADDRESS=${await creditScore.getAddress()}`);
-  console.log(`COLLATERAL_MANAGER_ADDRESS=${await collateralManager.getAddress()}`);
-  console.log(`LOAN_MANAGER_ADDRESS=${await loanManager.getAddress()}`);
+  console.log(`BLOCK_MANAGER_ADDRESS=${deployment.blockManager}`);
+  console.log(`KYC_REGISTRY_ADDRESS=${deployment.kycRegistry}`);
+  console.log(`CREDIT_SCORE_ADDRESS=${deployment.creditScore}`);
+  console.log(`COLLATERAL_MANAGER_ADDRESS=${deployment.collateralManager}`);
+  console.log(`LOAN_MANAGER_ADDRESS=${deployment.loanManager}`);
+  console.log(`INITIAL_LIQUIDITY_ETH=${deployment.initialLiquidityEth}`);
+  console.log("Saved deployment to deployments/localhost.json");
 }
 
 main().catch((error) => {

@@ -10,7 +10,10 @@
     "compile": "npx hardhat compile",
     "deploy": "npx hardhat run scripts/deploy.js --network localhost",
     "blocks": "npx hardhat run scripts/block-demo.js --network localhost",
-    "blocks:local": "npx hardhat run scripts/block-demo.js"
+    "blocks:local": "npx hardhat run scripts/block-demo.js",
+    "user": "npx hardhat run scripts/user-cli.js --network localhost",
+    "verifier": "npx hardhat run scripts/verifier-cli.js --network localhost",
+    "monitor": "npx hardhat run scripts/monitor-blocks.js --network localhost"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^4.0.0",

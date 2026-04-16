@@ -147,7 +147,7 @@ async function askForLoanRequest(rl, userLabel, loanManager) {
 
     const config = await loanManager.loanConfigs(loanType);
     const enabled = config.enabled ?? config[3];
-    const maxDurationDays = config.maxDurationDays ?? config[2];
+    const maxDurationSeconds = config.maxDurationSeconds ?? config[2];
     const collateralRatioBps = config.collateralRatioBps ?? config[1];
 
     if (!enabled) {
@@ -174,18 +174,18 @@ async function askForLoanRequest(rl, userLabel, loanManager) {
     }
 
     const durationAnswer =
-      configuredDuration || (await rl.question(`Enter loan duration in days for ${userLabel}: `));
-    const durationDays = Number(durationAnswer);
+      configuredDuration || (await rl.question(`Enter loan duration in seconds for ${userLabel}: `));
+    const durationSeconds = Number(durationAnswer);
 
-    if (!Number.isInteger(durationDays) || durationDays <= 0) {
-      console.log("Duration must be a positive whole number of days.");
+    if (!Number.isInteger(durationSeconds) || durationSeconds <= 0) {
+      console.log("Duration must be a positive whole number of seconds.");
       if (configuredDuration) throw new Error(`LOAN_DURATION_${envPrefix} is invalid.`);
       continue;
     }
 
-    if (BigInt(durationDays) > maxDurationDays) {
+    if (BigInt(durationSeconds) > maxDurationSeconds) {
       console.log(
-        `${LOAN_TYPE_LABELS[loanType]} loan duration must be ${maxDurationDays.toString()} days or less.`
+        `${LOAN_TYPE_LABELS[loanType]} loan duration must be ${maxDurationSeconds.toString()} seconds or less.`
       );
       if (configuredDuration) throw new Error(`LOAN_DURATION_${envPrefix} exceeds max duration.`);
       continue;
@@ -194,7 +194,7 @@ async function askForLoanRequest(rl, userLabel, loanManager) {
     const requiredCollateral = (amount * collateralRatioBps) / BPS_DENOMINATOR;
 
     console.log(
-      `${userLabel} loan input accepted: ${LOAN_TYPE_LABELS[loanType]}, ${ethers.formatEther(amount)} ETH, ${durationDays} days`
+      `${userLabel} loan input accepted: ${LOAN_TYPE_LABELS[loanType]}, ${ethers.formatEther(amount)} ETH, ${durationSeconds} seconds`
     );
 
     if (requiredCollateral > 0n) {
@@ -206,7 +206,7 @@ async function askForLoanRequest(rl, userLabel, loanManager) {
     return {
       loanType,
       amount,
-      durationDays,
+      durationSeconds,
       requiredCollateral,
     };
   }
@@ -392,7 +392,7 @@ async function createLoanEventsForUser({
     `${userLabel} request ${LOAN_TYPE_LABELS[loanRequest.loanType]} loan`,
     await loanManager
       .connect(user)
-      .requestLoan(loanRequest.loanType, loanRequest.amount, loanRequest.durationDays),
+      .requestLoan(loanRequest.loanType, loanRequest.amount, loanRequest.durationSeconds),
     blockManager
   );
 
