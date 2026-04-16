@@ -257,6 +257,7 @@ contract LoanManager is Ownable, ReentrancyGuard {
     /**
      * @dev Mark a loan as defaulted if overdue. Can be called by anyone.
      * Collateral (if any) is seized by the contract owner.
+     * Credit score is penalized by 100 points.
      */
     function markLoanDefaulted(uint256 loanId) external nonReentrant {
         Loan storage loan = loans[loanId];
@@ -271,6 +272,11 @@ contract LoanManager is Ownable, ReentrancyGuard {
         if (loan.collateralRequired) {
             collateralManager.seizeCollateral(loanId, owner());
         }
+
+        // Penalize credit score for default (-100 points, minimum 300)
+        uint256 currentScore = creditScore.getScore(loan.borrower);
+        uint256 newScore = currentScore > 100 ? currentScore - 100 : 300;
+        creditScore.updateScore(loan.borrower, newScore);
 
         emit LoanDefaulted(loanId, loan.borrower, block.timestamp);
     }
