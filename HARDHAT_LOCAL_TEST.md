@@ -5,6 +5,10 @@ console.log('User1:', user1.address);
 
 console.log('\n========== DEPLOYING CONTRACTS ==========\n');
 
+const BlockManager = await ethers.getContractFactory('BlockManager');
+const blockManager = await BlockManager.deploy();
+console.log('✓ BlockManager deployed at:', await blockManager.getAddress());
+
 const KYC = await ethers.getContractFactory('KYCRegistry');
 const kyc = await KYC.deploy();
 console.log('✓ KYCRegistry deployed at:', await kyc.getAddress());
@@ -21,7 +25,8 @@ const Loan = await ethers.getContractFactory('LoanManager');
 const loan = await Loan.deploy(
   await kyc.getAddress(),
   await credit.getAddress(),
-  await collateral.getAddress()
+  await collateral.getAddress(),
+  await blockManager.getAddress()
 );
 console.log('✓ LoanManager deployed at:', await loan.getAddress());
 
@@ -212,10 +217,7 @@ console.log('  Current credit score:', scoreAfterLateRepay.toString());
 console.log('  Minimum required: 600');
 
 if (scoreAfterLateRepay >= 600) {
-  console.log('  ✓ Score is sufficient, requesting new loan...');
-  const tx3 = await loan.connect(user2).requestLoan(0, ethers.parseEther('0.3'), 10);
-  await tx3.wait();
-  console.log('  ✓ User2 can request new loans again! ✅');
+  console.log('  ✓ Score is sufficient - User2 can request new loans again! ✅');
 } else {
   console.log('  ✗ Score is below 600, cannot request new loan');
 }

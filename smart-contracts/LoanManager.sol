@@ -6,6 +6,8 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./KYCRegistry.sol";
 import "./CreditScore.sol";
 import "./CollateralManager.sol";
+import "./BlockManager.sol";
+import "./BlockManager.sol";
 
 /**
  * @title LoanManager
@@ -56,6 +58,7 @@ contract LoanManager is Ownable, ReentrancyGuard {
     KYCRegistry public kycRegistry;
     CreditScore public creditScore;
     CollateralManager public collateralManager;
+    BlockManager public blockManager;
 
     // Minimum credit score for loan eligibility
     uint256 public constant MIN_CREDIT_SCORE = 600;
@@ -75,10 +78,11 @@ contract LoanManager is Ownable, ReentrancyGuard {
     event LiquidityDeposited(address indexed lender, uint256 amount);
     event LiquidityWithdrawn(address indexed lender, uint256 amount);
 
-    constructor(address _kycRegistry, address _creditScore, address _collateralManager) {
+    constructor(address _kycRegistry, address _creditScore, address _collateralManager, address _blockManager) {
         kycRegistry = KYCRegistry(_kycRegistry);
         creditScore = CreditScore(_creditScore);
         collateralManager = CollateralManager(_collateralManager);
+        blockManager = BlockManager(_blockManager);
 
         // Set some sane defaults for loan configs (can be updated by owner)
         loanConfigs[LoanType.Personal] = LoanConfig({
@@ -199,6 +203,9 @@ contract LoanManager is Ownable, ReentrancyGuard {
             collateralManager.registerLoan(newLoanId, msg.sender);
         }
 
+        // Log transaction to blockchain
+        blockManager.addTransaction(msg.sender, "LoanRequest", amount, "Loan requested");
+
         emit LoanRequested(newLoanId, msg.sender, loanType, amount, duration, collateralRequired);
         return newLoanId;
     }
@@ -230,6 +237,9 @@ contract LoanManager is Ownable, ReentrancyGuard {
         (bool success, ) = payable(loan.borrower).call{value: loan.amount}("");
         require(success, "LoanManager: Principal transfer failed");
 
+        // Log transaction to blockchain
+        blockManager.addTransaction(loan.borrower, "LoanApproval", loan.amount, "Loan approved");
+
         emit LoanApproved(loanId, loan.borrower);
     }
 
@@ -253,6 +263,9 @@ contract LoanManager is Ownable, ReentrancyGuard {
 
         // add repayment (principal + interest) back into liquidity pool
         totalLiquidity += msg.value;
+
+        // Log transaction to blockchain
+        blockManager.addTransaction(msg.sender, "LoanRepayment", msg.value, "Loan repaid on time");
 
         uint256 interestPaid = loan.totalRepayment - loan.amount;
         emit LoanRepaid(loanId, msg.sender, loan.totalRepayment, interestPaid);
@@ -282,6 +295,9 @@ contract LoanManager is Ownable, ReentrancyGuard {
         uint256 penalty = (daysOverdue + 1) * 10; // +1 to count the due date day itself
         
         creditScore.decreaseScore(loan.borrower, penalty);
+
+        // Log transaction to blockchain
+        blockManager.addTransaction(loan.borrower, "LoanDefaulted", loan.amount, "Loan marked as defaulted");
 
         emit LoanDefaulted(loanId, loan.borrower, block.timestamp);
     }
