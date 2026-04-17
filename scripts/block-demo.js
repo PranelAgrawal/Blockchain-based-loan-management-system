@@ -216,6 +216,7 @@ function storeAadhaarInMongo(walletAddress, aadhaarNumber) {
   if (!process.env.MONGODB_URI) {
     throw new Error("MONGODB_URI is missing in .env. Add your MongoDB Compass connection URL first.");
   }
+  const normalizedAddress = walletAddress.toLowerCase();
 
   const mongoScript = `
     const targetDb = db.getSiblingDB(${JSON.stringify(MONGODB_DB)});
@@ -227,10 +228,33 @@ function storeAadhaarInMongo(walletAddress, aadhaarNumber) {
         if (error.codeName !== "IndexNotFound") throw error;
       }
     }
-    users.createIndex({ address: 1 }, { unique: true });
+    users.updateMany(
+      {
+        address: { $type: "string" },
+        $or: [{ addressLower: { $exists: false } }, { addressLower: null }]
+      },
+      [{ $set: { addressLower: { $toLower: "$address" } } }]
+    );
+    users.createIndex(
+      { addressLower: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { addressLower: { $type: "string" } }
+      }
+    );
     users.replaceOne(
-      { address: ${JSON.stringify(walletAddress.toLowerCase())} },
-      { address: ${JSON.stringify(walletAddress.toLowerCase())}, adhaarNumber: ${JSON.stringify(aadhaarNumber)} },
+      {
+        $or: [
+          { addressLower: ${JSON.stringify(normalizedAddress)} },
+          { address: ${JSON.stringify(walletAddress)} },
+          { address: ${JSON.stringify(normalizedAddress)} }
+        ]
+      },
+      {
+        address: ${JSON.stringify(walletAddress)},
+        addressLower: ${JSON.stringify(normalizedAddress)},
+        adhaarNumber: ${JSON.stringify(aadhaarNumber)}
+      },
       { upsert: true }
     );
   `;

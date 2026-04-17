@@ -138,6 +138,7 @@ function runMongo(script) {
 }
 
 function saveKycRequest({ address, aadhaarNumber, documentHash }) {
+  const normalizedAddress = address.toLowerCase();
   const script = `
     const targetDb = db.getSiblingDB(${JSON.stringify(MONGODB_DB)});
     const users = targetDb.getCollection(${JSON.stringify(AADHAAR_COLLECTION)});
@@ -146,11 +147,31 @@ function saveKycRequest({ address, aadhaarNumber, documentHash }) {
         if (error.codeName !== "IndexNotFound") throw error;
       }
     }
-    users.createIndex({ address: 1 }, { unique: true });
-    users.replaceOne(
-      { address: ${JSON.stringify(address.toLowerCase())} },
+    users.updateMany(
       {
-        address: ${JSON.stringify(address.toLowerCase())},
+        address: { $type: "string" },
+        $or: [{ addressLower: { $exists: false } }, { addressLower: null }]
+      },
+      [{ $set: { addressLower: { $toLower: "$address" } } }]
+    );
+    users.createIndex(
+      { addressLower: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { addressLower: { $type: "string" } }
+      }
+    );
+    users.replaceOne(
+      {
+        $or: [
+          { addressLower: ${JSON.stringify(normalizedAddress)} },
+          { address: ${JSON.stringify(address)} },
+          { address: ${JSON.stringify(normalizedAddress)} }
+        ]
+      },
+      {
+        address: ${JSON.stringify(address)},
+        addressLower: ${JSON.stringify(normalizedAddress)},
         adhaarNumber: ${JSON.stringify(aadhaarNumber)},
         documentHash: ${JSON.stringify(documentHash)},
         kycStatus: "pending",
@@ -163,12 +184,21 @@ function saveKycRequest({ address, aadhaarNumber, documentHash }) {
 }
 
 function updateKycStatus({ address, status, txHash, creditScore }) {
+  const normalizedAddress = address.toLowerCase();
   const script = `
     const targetDb = db.getSiblingDB(${JSON.stringify(MONGODB_DB)});
     targetDb.getCollection(${JSON.stringify(AADHAAR_COLLECTION)}).updateOne(
-      { address: ${JSON.stringify(address.toLowerCase())} },
+      {
+        $or: [
+          { addressLower: ${JSON.stringify(normalizedAddress)} },
+          { address: ${JSON.stringify(address)} },
+          { address: ${JSON.stringify(normalizedAddress)} }
+        ]
+      },
       {
         $set: {
+          address: ${JSON.stringify(address)},
+          addressLower: ${JSON.stringify(normalizedAddress)},
           kycStatus: ${JSON.stringify(status)},
           kycTxHash: ${JSON.stringify(txHash)},
           creditScore: ${Number(creditScore)},
@@ -193,10 +223,20 @@ function getPendingKycRequests() {
 }
 
 function getKycRequest(address) {
+  const normalizedAddress = address.toLowerCase();
   const script = `
     const targetDb = db.getSiblingDB(${JSON.stringify(MONGODB_DB)});
     const row = targetDb.getCollection(${JSON.stringify(AADHAAR_COLLECTION)})
-      .findOne({ address: ${JSON.stringify(address.toLowerCase())} }, { projection: { _id: 0 } });
+      .findOne(
+        {
+          $or: [
+            { addressLower: ${JSON.stringify(normalizedAddress)} },
+            { address: ${JSON.stringify(address)} },
+            { address: ${JSON.stringify(normalizedAddress)} }
+          ]
+        },
+        { projection: { _id: 0 } }
+      );
     print(JSON.stringify(row));
   `;
   const output = runMongo(script);

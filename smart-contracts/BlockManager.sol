@@ -10,7 +10,7 @@ contract BlockManager {
         uint256 timestamp;
         string description;
     }
-
+    
     struct Block {
         uint256 blockNumber;
         bytes32 txMerkleRoot; // Hash representing all transactions

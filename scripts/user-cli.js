@@ -26,7 +26,7 @@ async function submitKycRequest({ rl, signer }) {
     const documentHash = getAadhaarDocumentHash(signer.address, aadhaarNumber);
     saveKycRequest({ address: signer.address, aadhaarNumber, documentHash });
     console.log("KYC request sent to verifier.");
-    console.log(`MongoDB users record: { address: "${signer.address.toLowerCase()}", adhaarNumber: "${aadhaarNumber}" }`);
+    console.log(`MongoDB users record: { address: "${signer.address}", adhaarNumber: "${aadhaarNumber}" }`);
     console.log("Ask the KYC verifier to run: npm run verifier");
     return;
   }
